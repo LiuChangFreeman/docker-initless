@@ -1,0 +1,10 @@
+{
+  "fs": {
+    "checkpoint": "/checkpoints",
+    "storage": "/volume"
+  },
+  "criu": {
+    "path": "/usr/local/bin/criu"
+  },
+
+}
