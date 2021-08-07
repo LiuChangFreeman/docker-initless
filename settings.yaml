@@ -1,0 +1,12 @@
+redis_port: 6380
+redis_host: "0.0.0.0"
+runc_watchdog_host: "0.0.0.0"
+reserved_ports:
+  [10000,20000]
+code_dir: "/home/sample"
+checkpoint_dir: "/home/checkpoint"
+pre_start_pool_size: 2
+max_pool_size: 4
+pre_start_timeout: 25
+idle_timeout: 1
+max_concurrency: 100

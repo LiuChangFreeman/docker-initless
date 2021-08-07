@@ -1,0 +1,22 @@
+service_name:
+  flask
+image_name:
+  flask
+tag_name:
+  init
+checkpoint_tag_name:
+  latest
+checkpoint_name:
+  flask_checkpoint
+start_cmd:
+  - python
+  - lazy.py
+service_port:
+  9000
+host_port:
+  8001
+health_check:
+  path: "/?key=9999"
+  wanted: "9999"
+msg_checkpoint:
+  "Serving Flask app"

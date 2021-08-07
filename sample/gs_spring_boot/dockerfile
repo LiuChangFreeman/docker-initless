@@ -1,0 +1,5 @@
+FROM openjdk:11
+ENV GITHUB_HTTP_PORXY=https://ghproxy.com
+EXPOSE 8080/tcp
+WORKDIR /usr/src/dir
+RUN wget $GITHUB_HTTP_PORXY/https://github.com/LiuChangFreeman/gs-spring-boot/releases/download/latest/spring-boot-complete-0.0.1-SNAPSHOT.jar

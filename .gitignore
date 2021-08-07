@@ -4,3 +4,7 @@
 .cache
 .vscode
 temp
+logs
+checkpoint
+docker-initless
+*.pyc

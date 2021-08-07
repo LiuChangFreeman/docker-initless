@@ -1,0 +1,5 @@
+FROM python:latest
+EXPOSE 9000/tcp
+WORKDIR /usr/src/dir
+ADD lazy.py /usr/src/dir/lazy.py
+RUN pip install flask -i https://mirrors.aliyun.com/pypi/simple/

@@ -1,0 +1,23 @@
+service_name:
+  gs_spring_boot
+image_name:
+  gs_spring_boot
+tag_name:
+  init
+checkpoint_tag_name:
+  latest
+checkpoint_name:
+  spring_boot_checkpoint
+start_cmd:
+  - java
+  - -jar
+  - spring-boot-complete-0.0.1-SNAPSHOT.jar
+service_port:
+  8080
+host_port:
+  8002
+health_check:
+  path: "/"
+  wanted: "Greetings from Spring Boot!"
+msg_checkpoint:
+  "Started Application"
