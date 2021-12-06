@@ -1,7 +1,7 @@
 service_name:
   flask
 is_enabled:
-  false
+  true
 image_name:
   flask
 tag_name:

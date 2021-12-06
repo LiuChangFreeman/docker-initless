@@ -9,7 +9,7 @@ checkpoint_dir: "/home/checkpoint"
 recycle_workers: 4
 pre_start_pool_size: 2
 max_pool_size: 4
-pre_start_timeout: 25
+pre_start_timeout: 15
 idle_timeout: 1
 health_check_timeout: 10
 max_concurrency: 100

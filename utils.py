@@ -19,8 +19,9 @@ def init():
     if not os.path.exists(path_logs):
         os.mkdir(path_logs)
     log = logging.getLogger()
+    logging.getLogger("urllib3").propagate = False
     log.setLevel(logging.DEBUG)
-    fmt = logging.Formatter(fmt="%(asctime)s[]%(message)s", datefmt='%D %H:%M:%S')
+    fmt = logging.Formatter(fmt="%(asctime)s %(message)s", datefmt='%D %H:%M:%S')
     terminal_handler = logging.StreamHandler()
     terminal_handler.setLevel(logging.DEBUG)
     terminal_handler.setFormatter(fmt)
@@ -30,7 +31,7 @@ def init():
     file_handler.setFormatter(fmt)
     log.addHandler(terminal_handler)
     log.addHandler(file_handler)
-    settings = yaml.load(open(path_settings).read())
+    settings = yaml.load(open(path_settings).read(), Loader=yaml.FullLoader)
 
     path_checkpoint_parent= settings["checkpoint_dir"]
     path_checkpoint_temp=os.path.join(path_checkpoint_parent,"temp")
