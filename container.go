@@ -51,22 +51,23 @@ func setCheckpointImages(instance *ContainerInstance) string {
 	if !Exists(pathCheckpointUpper) {
 		err := os.Mkdir(pathCheckpointUpper, 777)
 		if err != nil {
-			log.Fatalf("Checkpoint imgs mkdir error: %v", err)
+			log.Printf("[%v] Checkpoint imgs mkdir error: %v\n", instance.Name, err)
 		}
 	}
 
 	if !Exists(pathCheckpointMerge) {
 		err := os.Mkdir(pathCheckpointMerge, 777)
 		if err != nil {
-			log.Fatalf("Checkpoint imgs mkdir error: %v", err)
+			log.Printf("[%v] Checkpoint imgs mkdir error: %v", instance.Name, err)
 		}
 	}
 
 	cmdMount := fmt.Sprintf("mount -t overlay -o lowerdir=%v,upperdir=%v,workdir=%v overlay %v", pathCheckpointLower, pathCheckpointUpper, pathCheckpointMerge, pathCheckpointMerge)
 	_, err := exec.Command("bash", "-c", cmdMount).Output()
 	if err != nil {
-		log.Fatalf("Mount overlay-fs error: %v", err)
+		log.Printf("[%v] Mount overlay-fs error: %v", instance.Name, err)
 	}
+
 	return pathCheckpointMerge
 }
 
@@ -78,26 +79,17 @@ func removeCheckpointImages(instance *ContainerInstance) {
 	pathCheckpointMerge := path.Join(pathCheckpointTemp, fmt.Sprintf("v%v-merge", containerId))
 
 	cmdUmount := fmt.Sprintf("umount -lf %v", pathCheckpointMerge)
-	_, err := exec.Command("bash", "-c", cmdUmount).Output()
-	if err != nil {
-		log.Printf("Umount overlay-fs error: %v", err)
-	}
+	_, _ = exec.Command("bash", "-c", cmdUmount).Output()
 
-	err = os.RemoveAll(pathCheckpointMerge)
-	if err != nil {
-		log.Printf("Remove checkpoint imgs error: %v", err)
-	}
-	err = os.RemoveAll(pathCheckpointUpper)
-	if err != nil {
-		log.Printf("Remove checkpoint imgs error: %v", err)
-	}
+	_ = os.RemoveAll(pathCheckpointMerge)
+
+	_ = os.RemoveAll(pathCheckpointUpper)
 }
 
 func startLazyPageServer(pathCheckpoint string) {
-	cmdStartLazyPageServer := fmt.Sprintf("criu lazy-pages --images-dir %v", pathCheckpoint)
-	_, err := exec.Command("bash", "-c", cmdStartLazyPageServer).Output()
+	_, err := exec.Command("/usr/local/bin/criu", "lazy-pages", "--images-dir", pathCheckpoint).Output()
 	if err != nil {
-		log.Fatalf("Start lazy page server error: %v", err)
+		log.Printf("[%v] Start lazy page server error: %v\n", pathCheckpoint, err)
 	}
 }
 
@@ -105,30 +97,47 @@ func preStartContainer(instance *ContainerInstance) {
 	containerId := instance.Port
 	pathCheckpoint := settings.CheckpointDir
 	pathCheckpointTemp := path.Join(pathCheckpoint, "temp")
-	cmdPreStartContainer := fmt.Sprintf("docker start --checkpoint-dir=%v --checkpoint=v%v-merge %v", pathCheckpointTemp, containerId, instance.Name)
-	_, err := exec.Command("bash", "-c", cmdPreStartContainer).Output()
+	err := dockerClient.ContainerStart(ctx, instance.Id, types.ContainerStartOptions{CheckpointDir: pathCheckpointTemp, CheckpointID: fmt.Sprintf("v%v-merge", containerId)})
 	if err != nil {
-		log.Printf("Pre-start container error: %v", err)
+		log.Printf("[%v] Pre-start container error: %v\n", instance.Name, err)
 	}
-	log.Printf("Container pre-start time: %v ms\n", time.Since(instance.BootTime).Milliseconds())
 }
 
 func removeContainer(instance *ContainerInstance) {
-	err := dockerClient.ContainerRemove(ctx, instance.Id, types.ContainerRemoveOptions{Force: true})
-	if err != nil {
-		log.Printf("Remove container error: %v", err)
-	}
+	_, _ = net.Dial("tcp", fmt.Sprintf("%v:%v", settings.RuncWatchdogHost, instance.Port+settings.RuncWatchdogPortBase))
+	log.Printf("[%v] Start to remove\n", instance.Name)
+	_ = dockerClient.ContainerRemove(ctx, instance.Id, types.ContainerRemoveOptions{Force: true})
 	redisClient.Del(ctx, instance.Id)
-	delete(allocatedPorts, instance.Port)
-	log.Printf("Remove container: %v\n", instance.Name)
+	allocatedPorts.Lock()
+	delete(allocatedPorts.data, instance.Port)
+	allocatedPorts.Unlock()
+	log.Printf("[%v] Remove finished\n", instance.Name)
 }
 
 func startContainer(instance *ContainerInstance) {
-	log.Printf("Start container %v\n", instance.Name)
-	portWatchdog := instance.Port + 19000
+	config := instance.Config
+	waittingConnsChan := waittingConnsChans.data[config.HostPort]
+	readyContainersList := readyContainersLists.data[config.HostPort]
 	instance.BootTime = time.Now()
-	_, _ = net.Dial("tcp", fmt.Sprintf("0.0.0.0:%v", portWatchdog))
-	instance.Status = Running
+	_, _ = net.Dial("tcp", fmt.Sprintf("%v:%v", settings.RuncWatchdogHost, instance.Port+settings.RuncWatchdogPortBase))
+
+	for {
+		if time.Since(instance.BootTime) > time.Second*time.Duration(settings.HealthCheckTimeout) {
+			log.Printf("[%v] Health check max tries reached\n", instance.Name)
+			instance.Status = Stopped
+			waittingConnsChan <- none
+			break
+		}
+		if healthCheck(instance) {
+			log.Printf("[%v] Health check latency test result is: %v ms\n", instance.Name, time.Since(instance.BootTime).Milliseconds())
+			instance.Status = Running
+			readyContainersList <- instance
+			log.Printf("[%v] Instance ready\n", instance.Name)
+			break
+		}
+	}
+
+	<-boottingContainer
 }
 
 func newContainerInstance(config ServiceConfig) *ContainerInstance {
@@ -137,17 +146,23 @@ func newContainerInstance(config ServiceConfig) *ContainerInstance {
 	usedPorts := getUsedPorts()
 	for {
 		port := reservedPorts[0] + rand.Intn(reservedPorts[1]-reservedPorts[0])
-		_, exist := allocatedPorts[port]
+		_, exist := allocatedPorts.data[port]
 		_, exist2 := usedPorts[port]
-		if !exist && !exist2 {
-			allocatedPorts[port] = none
+
+		portWatchdog := port + settings.RuncWatchdogPortBase
+		_, exist3 := allocatedPorts.data[portWatchdog]
+		_, exist4 := usedPorts[portWatchdog]
+
+		if !exist && !exist2 && !exist3 && !exist4 {
+			allocatedPorts.Lock()
+			allocatedPorts.data[port] = none
+			allocatedPorts.Unlock()
 			portChosen = port
 			break
 		}
 	}
 
 	containerName := fmt.Sprintf("%v-%v", config.ImageName, portChosen)
-	log.Printf("Choose port %v\n", portChosen)
 
 	instance := &ContainerInstance{
 		Status:        Created,
@@ -180,129 +195,173 @@ func newContainerInstance(config ServiceConfig) *ContainerInstance {
 			}},
 		},
 	}
-
-	log.Println("Set checkpoint imgs using overlay-fs")
 	pathCheckpoint := setCheckpointImages(instance)
 
-	log.Println("Create container")
+	log.Printf("[%v] Create container %v\n", config.ServiceName, containerName)
 	containerCurrent, err := dockerClient.ContainerCreate(ctx, dockerConfig, hostConfig, nil, nil, containerName)
 	if err != nil {
-		log.Printf("Create container error: %v\n", err)
+		log.Printf("[%v] Create container error: %v\n", config.ServiceName, err)
 		return nil
 	}
 	instance.Id = containerCurrent.ID
 
-	log.Println("Start lazy-pages server")
 	go startLazyPageServer(pathCheckpoint)
 
-	log.Println("Set container port")
-	portWatchdog := 19000 + portChosen
-	redisClient.Set(ctx, containerCurrent.ID, portWatchdog, 0)
+	portWatchdog := settings.RuncWatchdogPortBase + portChosen
+	redisClient.Set(ctx, instance.Id, portWatchdog, 0)
 
-	log.Println("Pre-start container")
 	go preStartContainer(instance)
 
 	return instance
 }
 
 func chooseOneContainerInstance(conn *net.TCPConn, config ServiceConfig) {
-	waittingList := waittingLists[config.HostPort]
-	waittingList <- true
-
-	for range time.Tick(time.Millisecond * 25) {
-		allContainerInstances := serviceInstances[config.HostPort]
-		for _, instance := range allContainerInstances {
-			if instance.Status == Running && len(instance.ConnCount) < settings.MaxConcurrency {
-				go handleConn(conn, instance)
-				goto out
-			}
-		}
+	waittingConnsChan := waittingConnsChans.data[config.HostPort]
+	readyContainersList := readyContainersLists.data[config.HostPort]
+	waittingConnsChan <- none
+	select {
+	case instance := <-readyContainersList:
+		handleConn(conn, instance)
+		break
 	}
-out:
 }
 
-func cleanUpStoppedContainerInstances(config ServiceConfig) {
-	for range time.Tick(time.Second * 3) {
-		allContainerInstances := serviceInstances[config.HostPort]
-		for i := 0; i < len(allContainerInstances); i++ {
-			instance := allContainerInstances[i]
-			if instance.Status == Stopped {
-				removeContainer(instance)
+func cleanUpStoppedContainerInstances() {
+	for {
+		select {
+		case instance := <-stopedInstances:
+			done := make(chan void, 1)
+			go func() {
 				removeCheckpointImages(instance)
-				allContainerInstances = append(allContainerInstances[:i], allContainerInstances[i+1:]...)
-				i--
+				removeContainer(instance)
+				done <- none
+			}()
+
+			select {
+			case <-done:
+				break
+			case <-time.After(time.Second * 30):
+				log.Printf("[Warning] Remove container time out\n")
+				break
 			}
 		}
 	}
 }
 
 func scheduleContainerInstances(config ServiceConfig) {
-	for range time.Tick(time.Millisecond * 500) {
-		allContainerInstances := serviceInstances[config.HostPort]
-
-		for _, instance := range allContainerInstances {
-			if instance.Status == Running && time.Since(instance.LastVisitTime) >= time.Minute*time.Duration(settings.IdleTimeout) {
+	for range time.Tick(time.Millisecond * 100) {
+		serviceInstances.Lock()
+		allContainerInstances := serviceInstances.data[config.HostPort]
+		for i := 0; i < len(allContainerInstances); i++ {
+			instance := allContainerInstances[i]
+			if (instance.Status == Running && time.Since(instance.LastVisitTime) >= time.Minute*time.Duration(settings.IdleTimeout)) ||
+				(instance.Status == Created && time.Since(instance.LastVisitTime) >= time.Minute*time.Duration(settings.PreStartTimeout)) || instance.Status == Stopped {
 				instance.Status = Stopped
-			}
-			if instance.Status == Created && time.Since(instance.LastVisitTime) >= time.Minute*time.Duration(settings.PreStartTimeout) {
-				instance.Status = Stopped
+				stopedInstances <- instance
+				allContainerInstances = append(allContainerInstances[:i], allContainerInstances[i+1:]...)
+				i--
 			}
 		}
+		serviceInstances.data[config.HostPort] = allContainerInstances
+		serviceInstances.Unlock()
 
 		containerInfo := getInstancesInfo(allContainerInstances)
 		if containerInfo[Created] < settings.PreStartPoolSize {
-			log.Printf("Spawn pre-start container pool")
+			boottingContainer <- none
+			log.Printf("[%v] Spawn pre-start container\n", config.ServiceName)
 			instance := newContainerInstance(config)
+			<-boottingContainer
 			if instance != nil {
-				allContainerInstances = append(allContainerInstances, instance)
-				serviceInstances[config.HostPort] = allContainerInstances
+				serviceInstances.Lock()
+				serviceInstances.data[config.HostPort] = append(serviceInstances.data[config.HostPort], instance)
+				serviceInstances.Unlock()
 			}
 		}
 	}
 }
 
 func startContainerWatchdog(config ServiceConfig) {
-	waittingList := waittingLists[config.HostPort]
+	waittingList := waittingConnsChans.data[config.HostPort]
+	readyContainersList := readyContainersLists.data[config.HostPort]
 
 	for {
 		<-waittingList
-		allContainerInstances := serviceInstances[config.HostPort]
+		serviceInstances.RLock()
+		allContainerInstances := serviceInstances.data[config.HostPort]
+		serviceInstances.RUnlock()
 		containerInfo := getInstancesInfo(allContainerInstances)
-		if containerInfo[Running] == 0 {
-			log.Printf("No running container")
-			for _, instance := range allContainerInstances {
-				if instance.Status == Created {
-					startContainer(instance)
-					break
-				}
-			}
+
+		if containerInfo[Booting] > 0 {
+			go func() {
+				waittingList <- none
+			}()
 		} else {
-			if containerInfo[Full] >= containerInfo[Running] {
-				log.Printf("All containers are full")
-				if containerInfo[Running] < settings.MaxPoolSize {
+			if containerInfo[Running] == 0 {
+				if containerInfo[Created] > 0 {
 					for _, instance := range allContainerInstances {
 						if instance.Status == Created {
-							startContainer(instance)
+							log.Printf("[%v] No running container, start %v\n", config.ServiceName, instance.Name)
+							boottingContainer <- none
+							instance.Status = Booting
+							go startContainer(instance)
 							break
 						}
 					}
 				} else {
-					log.Printf("Max pool size reached")
+					log.Printf("[%v] Pool is empty\n", config.ServiceName)
+					time.Sleep(time.Millisecond * 50)
+					waittingList <- none
+				}
+			} else {
+				if containerInfo[Full] >= containerInfo[Running] {
+					if containerInfo[Running] < settings.MaxPoolSize {
+						for _, instance := range allContainerInstances {
+							if instance.Status == Created {
+								log.Printf("[%v]All containers are full, start %v\n", config.ServiceName, instance.Name)
+								boottingContainer <- none
+								instance.Status = Booting
+								go startContainer(instance)
+								break
+							}
+						}
+					} else {
+						log.Printf("[%v] Max pool size reached\n", config.ServiceName)
+						time.Sleep(time.Millisecond * 50)
+						waittingList <- none
+					}
+				} else {
+					for _, instance := range allContainerInstances {
+						if instance.Status == Running && len(instance.ConnCount) < settings.MaxConcurrency {
+							readyContainersList <- instance
+							break
+						}
+					}
 				}
 			}
 		}
 	}
 }
 
-func spawnService(config ServiceConfig) {
+func initService(config ServiceConfig) {
 	hostPort := config.HostPort
-	_, exist := serviceInstances[hostPort]
+	serviceInstances.RLock()
+	_, exist := serviceInstances.data[hostPort]
+	serviceInstances.RUnlock()
 	if exist {
-		log.Fatalf("Dump service instance error: host port %v has been used", hostPort)
+		log.Fatalf("[%v] Host port %v has been used", config.ServiceName, hostPort)
 	}
 
-	serviceInstances[hostPort] = []*ContainerInstance{}
-	waittingLists[hostPort] = make(chan bool)
+	waittingConnsChans.Lock()
+	waittingConnsChans.data[hostPort] = make(chan void)
+	waittingConnsChans.Unlock()
+
+	readyContainersLists.Lock()
+	readyContainersLists.data[hostPort] = make(chan *ContainerInstance)
+	readyContainersLists.Unlock()
+
+	serviceInstances.Lock()
+	serviceInstances.data[hostPort] = []*ContainerInstance{}
+	serviceInstances.Unlock()
 
 	address := net.TCPAddr{
 		IP:   net.ParseIP("0.0.0.0"),
@@ -311,17 +370,16 @@ func spawnService(config ServiceConfig) {
 
 	listener, err := net.ListenTCP("tcp", &address)
 	if err != nil {
-		log.Fatal("Fail to listen to: ", address, err)
+		log.Fatalf("[%v] Fail to listen to %v: %v\n", config.ServiceName, address, err)
 	}
 
-	go cleanUpStoppedContainerInstances(config)
 	go scheduleContainerInstances(config)
 	go startContainerWatchdog(config)
 
 	for {
 		conn, err := listener.AcceptTCP()
 		if err != nil {
-			log.Fatal("Fail to accept: ", err)
+			log.Fatalf("[%v] Fail to accept: %v\n", config.ServiceName, err)
 		}
 		go chooseOneContainerInstance(conn, config)
 	}
@@ -330,26 +388,48 @@ func spawnService(config ServiceConfig) {
 func testInitless(config ServiceConfig) {
 	instance := newContainerInstance(config)
 
-	log.Println("Start container after 3s")
+	log.Printf("[%v] Will start container after 3s", instance.Name)
 	time.Sleep(time.Second * 3)
 
-	log.Println("Try to start container")
-	portWatchdog := instance.Port + 19000
+	log.Printf("[%v] Try to start container", instance.Name)
 	instance.BootTime = time.Now()
-	_, _ = net.Dial("tcp", fmt.Sprintf("0.0.0.0:%v", portWatchdog))
+	_, _ = net.Dial("tcp", fmt.Sprintf("%v:%v", settings.RuncWatchdogHost, instance.Port+settings.RuncWatchdogPortBase))
 
-	check := config.HealthCheck
 	for {
-		if time.Since(instance.BootTime) > time.Second*10 {
-			log.Println("Start container failed: max tries reached")
+		if time.Since(instance.BootTime) > time.Second*time.Duration(settings.HealthCheckTimeout) {
+			log.Printf("[%v] Health check max tries reached\n", instance.Name)
 			break
 		}
-		if healthCheck(instance.Port, check) {
-			log.Printf("Total time: %v ms\n", time.Since(instance.BootTime).Milliseconds())
+		if healthCheck(instance) {
+			log.Printf("[%v] Health check latency test result is: %v ms\n", instance.Name, time.Since(instance.BootTime).Milliseconds())
 			break
 		}
 	}
 
 	defer removeCheckpointImages(instance)
 	defer removeContainer(instance)
+}
+
+func cleanUpContainers() {
+	pathCheckpoint := settings.CheckpointDir
+	pathCheckpointTemp := path.Join(pathCheckpoint, "temp")
+	cmdUmount := fmt.Sprintf("umount -lf %v/*", pathCheckpointTemp)
+	_, _ = exec.Command("bash", "-c", cmdUmount).Output()
+
+	_ = os.RemoveAll(pathCheckpointTemp)
+	_ = os.Mkdir(pathCheckpointTemp, 0777)
+
+	cmdRestartDockerDaemon := "systemctl restart docker"
+	_, _ = exec.Command("bash", "-c", cmdRestartDockerDaemon).Output()
+
+	containers, _ := dockerClient.ContainerList(ctx, types.ContainerListOptions{All: true})
+	for _, instance := range containers {
+		if instance.Names[0][1:] == "redis" {
+			continue
+		}
+		_ = dockerClient.ContainerRemove(ctx, instance.ID, types.ContainerRemoveOptions{Force: true})
+	}
+
+	cmdKillPageServers := "ps -ef| grep 'criu'  | awk '{print $2}' |xargs kill -9"
+	_, _ = exec.Command("bash", "-c", cmdKillPageServers).Output()
 }

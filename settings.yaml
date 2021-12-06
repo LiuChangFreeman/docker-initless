@@ -1,12 +1,15 @@
 redis_port: 6380
 redis_host: "0.0.0.0"
 runc_watchdog_host: "0.0.0.0"
+runc_watchdog_port_base: 10000
 reserved_ports:
   [10000,20000]
 code_dir: "/home/sample"
 checkpoint_dir: "/home/checkpoint"
+recycle_workers: 4
 pre_start_pool_size: 2
 max_pool_size: 4
 pre_start_timeout: 25
 idle_timeout: 1
+health_check_timeout: 10
 max_concurrency: 100

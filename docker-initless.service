@@ -3,11 +3,11 @@ Description=docker-initless
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/docker-initless
 WorkingDirectory=/etc/docker
-ExecReload=/bin/kill -HUP $MAINPID
-KillMode=process
-Restart=on-failure
+ExecStart=/usr/local/bin/docker-initless -d
+ExecStop=/bin/kill -TERM $MAINPID
+ExecStopPost=/usr/local/bin/docker-initless -clean
+KillMode=control-group
 Type=simple
 
 [Install]

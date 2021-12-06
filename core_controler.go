@@ -2,27 +2,64 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"github.com/docker/docker/client"
 	"github.com/go-redis/redis/v8"
 	"io/ioutil"
 	"log"
 	"math/rand"
+	"os"
 	"path"
+	"sync"
 	"time"
 )
 
 var (
-	ctx              = context.Background()
-	settings         = getSettings()
-	redisClient      *redis.Client
-	dockerClient     *client.Client
-	allocatedPorts   = make(map[int]void)
-	serviceInstances = make(map[int][]*ContainerInstance)
-	waittingLists    = make(map[int]chan bool)
+	showHelp     bool
+	runTests     bool
+	doServe      bool
+	cleanUp      bool
+	ctx          = context.Background()
+	settings     = getSettings()
+	redisClient  *redis.Client
+	dockerClient *client.Client
+
+	allocatedPorts = struct {
+		sync.RWMutex
+		data map[int]void
+	}{data: make(map[int]void)}
+
+	serviceInstances = struct {
+		sync.RWMutex
+		data map[int][]*ContainerInstance
+	}{data: make(map[int][]*ContainerInstance)}
+
+	waittingConnsChans = struct {
+		sync.RWMutex
+		data map[int]chan void
+	}{data: make(map[int]chan void)}
+
+	readyContainersLists = struct {
+		sync.RWMutex
+		data map[int]chan *ContainerInstance
+	}{data: make(map[int]chan *ContainerInstance)}
+
+	stopedInstances   = make(chan *ContainerInstance)
+	boottingContainer = make(chan void, 1)
 )
 
-func main() {
+func init() {
+	flag.BoolVar(&showHelp, "h", false, "show help")
+	flag.BoolVar(&runTests, "t", false, "run tests using initless mode")
+	flag.BoolVar(&doServe, "d", false, "start daemon service")
+	flag.BoolVar(&cleanUp, "clean", false, "clean up all containers, except for redis")
+	flag.Parse()
+	if showHelp || (!runTests && !doServe && !cleanUp) {
+		flag.Usage()
+		os.Exit(0)
+	}
+
 	rand.Seed(time.Now().UTC().UnixNano())
 
 	redisClient = redis.NewClient(&redis.Options{
@@ -38,17 +75,42 @@ func main() {
 		log.Fatalf("New docker client error: %v", err)
 	}
 
+	if cleanUp {
+		cleanUpContainers()
+		os.Exit(0)
+	}
+}
+
+func main() {
 	codeDir := settings.CodeDir
 	pathCodeDirs, err := ioutil.ReadDir(codeDir)
 	if err != nil {
 		log.Fatalf("List code dir error: %v", err)
 	}
 
-	for _, pathCodeDir := range pathCodeDirs {
-		pathCurrent := path.Join(codeDir, pathCodeDir.Name())
-		containerConfig := getContainerConfig(pathCurrent)
-		go spawnService(containerConfig)
+	if runTests {
+		for _, pathCodeDir := range pathCodeDirs {
+			pathCurrent := path.Join(codeDir, pathCodeDir.Name())
+			containerConfig := getContainerConfig(pathCurrent)
+			if containerConfig.IsEnabled {
+				testInitless(containerConfig)
+			}
+		}
 	}
 
-	select {}
+	if doServe {
+
+		for i := 0; i < settings.RecycleWorkers; i++ {
+			go cleanUpStoppedContainerInstances()
+		}
+
+		for _, pathCodeDir := range pathCodeDirs {
+			pathCurrent := path.Join(codeDir, pathCodeDir.Name())
+			containerConfig := getContainerConfig(pathCurrent)
+			if containerConfig.IsEnabled {
+				go initService(containerConfig)
+			}
+		}
+		select {}
+	}
 }

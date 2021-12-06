@@ -1,5 +1,7 @@
 service_name:
   gs_spring_boot
+is_enabled:
+  true
 image_name:
   gs_spring_boot
 tag_name:
@@ -19,5 +21,6 @@ host_port:
 health_check:
   path: "/"
   wanted: "Greetings from Spring Boot!"
+  timeout: 150
 msg_checkpoint:
   "Started Application"

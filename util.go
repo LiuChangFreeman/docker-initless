@@ -17,26 +17,31 @@ import (
 )
 
 type Settings struct {
-	RedisHost        string `yaml:"redis_host"`
-	RedisPort        int    `yaml:"redis_port"`
-	RuncWatchdogHost string `yaml:"runc_watchdog_host"`
-	ReservedPorts    []int  `yaml:"reserved_ports"`
-	CodeDir          string `yaml:"code_dir"`
-	CheckpointDir    string `yaml:"checkpoint_dir"`
-	PreStartTimeout  int    `yaml:"pre_start_timeout"`
-	IdleTimeout      int    `yaml:"idle_timeout"`
-	PreStartPoolSize int    `yaml:"pre_start_pool_size"`
-	MaxPoolSize      int    `yaml:"max_pool_size"`
-	MaxConcurrency   int    `yaml:"max_concurrency"`
+	RedisHost            string `yaml:"redis_host"`
+	RedisPort            int    `yaml:"redis_port"`
+	RuncWatchdogHost     string `yaml:"runc_watchdog_host"`
+	RuncWatchdogPortBase int    `yaml:"runc_watchdog_port_base"`
+	ReservedPorts        []int  `yaml:"reserved_ports"`
+	CodeDir              string `yaml:"code_dir"`
+	CheckpointDir        string `yaml:"checkpoint_dir"`
+	PreStartTimeout      int    `yaml:"pre_start_timeout"`
+	IdleTimeout          int    `yaml:"idle_timeout"`
+	HealthCheckTimeout   int    `yaml:"health_check_timeout"`
+	RecycleWorkers       int    `yaml:"recycle_workers"`
+	PreStartPoolSize     int    `yaml:"pre_start_pool_size"`
+	MaxPoolSize          int    `yaml:"max_pool_size"`
+	MaxConcurrency       int    `yaml:"max_concurrency"`
 }
 
 type HealthCheck struct {
-	Path   string `yaml:"path"`
-	Wanted string `yaml:"wanted"`
+	Path    string `yaml:"path"`
+	Wanted  string `yaml:"wanted"`
+	Timeout int    `yaml:"timeout"`
 }
 
 type ServiceConfig struct {
 	ServiceName       string      `yaml:"service_name"`
+	IsEnabled         bool        `yaml:"is_enabled"`
 	ImageName         string      `yaml:"image_name"`
 	TagName           string      `yaml:"tag_name"`
 	CheckpointTagName string      `yaml:"checkpoint_tag_name"`
@@ -64,18 +69,6 @@ func Exists(path string) bool {
 	return true
 }
 
-func handleErr(err error) bool {
-	if err != nil {
-		if err != io.EOF {
-			return true
-		} else {
-			return true
-		}
-	} else {
-		return false
-	}
-}
-
 func handleConn(conn *net.TCPConn, instance *ContainerInstance) {
 	instance.LastVisitTime = time.Now()
 	instance.ConnCount <- true
@@ -90,7 +83,7 @@ func handleConn(conn *net.TCPConn, instance *ContainerInstance) {
 	defer serviceConn.Close()
 
 	if err != nil {
-		log.Printf("Fail to connect to %v: %v", address, err)
+		log.Printf("Fail to connect %v: %v", address, err)
 		return
 	}
 
@@ -100,7 +93,7 @@ func handleConn(conn *net.TCPConn, instance *ContainerInstance) {
 		var buff [512]byte
 		for {
 			m, err := conn.Read(buff[:])
-			if handleErr(err) {
+			if err != nil {
 				exit <- true
 				return
 			}
@@ -108,7 +101,7 @@ func handleConn(conn *net.TCPConn, instance *ContainerInstance) {
 			n := 0
 			for i := 0; i < m; i += n {
 				n, err = serviceConn.Write(buff[i:m])
-				if handleErr(err) {
+				if err != nil {
 					exit <- true
 					return
 				}
@@ -120,7 +113,7 @@ func handleConn(conn *net.TCPConn, instance *ContainerInstance) {
 		var buff [512]byte
 		for {
 			m, err := serviceConn.Read(buff[:])
-			if handleErr(err) {
+			if err != nil {
 				exit <- true
 				return
 			}
@@ -128,7 +121,7 @@ func handleConn(conn *net.TCPConn, instance *ContainerInstance) {
 			n := 0
 			for i := 0; i < m; i += n {
 				n, err = conn.Write(buff[i:m])
-				if handleErr(err) {
+				if err != nil {
 					exit <- true
 					return
 				}
@@ -192,20 +185,17 @@ func getUsedPorts() map[int]void {
 	return set
 }
 
-func healthCheck(port int, check HealthCheck) bool {
+func healthCheck(instance *ContainerInstance) bool {
+	check := instance.Config.HealthCheck
 	client := &http.Client{
-		Timeout: time.Millisecond * 100,
+		Timeout: time.Millisecond * time.Duration(check.Timeout),
 	}
-	url := fmt.Sprintf("http://0.0.0.0:%v%v", port, check.Path)
-	req, err := http.NewRequest("GET", url, nil)
+	url := fmt.Sprintf("http://0.0.0.0:%v%v", instance.Port, check.Path)
+	res, err := client.Get(url)
 	if err != nil {
 		return false
 	}
-	res, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	var buff [4096]byte
+	var buff [512]byte
 	cnt, err := res.Body.Read(buff[:])
 	if err != nil && err != io.EOF {
 		return false

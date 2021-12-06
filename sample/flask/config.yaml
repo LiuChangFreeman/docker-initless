@@ -1,5 +1,7 @@
 service_name:
   flask
+is_enabled:
+  false
 image_name:
   flask
 tag_name:
@@ -18,5 +20,6 @@ host_port:
 health_check:
   path: "/?key=9999"
   wanted: "9999"
+  timeout: 50
 msg_checkpoint:
   "Serving Flask app"

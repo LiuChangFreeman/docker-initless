@@ -14,6 +14,8 @@ instance_count=1
 epoch_count=10
 mutex_lock = Lock()
 queue = Queue(instance_count)
+settings = yaml.load(open(path_settings).read())
+path_checkpoint_temp=os.path.join(settings["checkpoint_dir"],"temp")
 
 def start_lazy_page_server(path_checkpoint_current):
     os.system("criu lazy-pages --images-dir {}".format(path_checkpoint_current))
@@ -48,7 +50,7 @@ def run_container_initless(container_id, config):
     container_name = "{}_{}".format(image_name,container_id)
     path_checkpoint_upper = os.path.join(path_checkpoint_temp, "v{}".format(container_id))
     path_checkpoint_merge = os.path.join(path_checkpoint_temp, "v{}-merge".format(container_id))
-    path_checkpoint_lower=os.path.join(path_checkpoint_parent,checkpoint_name)
+    path_checkpoint_lower=os.path.join(settings["checkpoint_dir"],checkpoint_name)
 
     log.info("Prepare checkpoint imgs using overlay-fs")
     if os.path.exists(path_checkpoint_merge):
@@ -135,9 +137,9 @@ def run_container_initless(container_id, config):
     docker_client.containers.get(container_name).remove(force=True)
     log.info("Test checkpoint finished")
 
-def test_initless(path_sample):
+def test_initless(path_code_dir):
     global log
-    path_yaml = os.path.join(path_sample, 'config.yaml')
+    path_yaml = os.path.join(path_code_dir, 'config.yaml')
     config = yaml.load(open(path_yaml).read())
     log.info("Start to test checkpoint")
     for i in range(epoch_count):
@@ -195,9 +197,9 @@ def run_container_normal(container_id, config):
     docker_client.containers.get(container_name).remove(force=True)
     log.info("Test checkpoint finished")
 
-def test_normal(path_sample):
+def test_normal(path_code_dir):
     global log
-    path_yaml = os.path.join(path_sample, 'config.yaml')
+    path_yaml = os.path.join(path_code_dir, 'config.yaml')
     config = yaml.load(open(path_yaml).read())
     log.info("Start to test normal boot")
     for i in range(epoch_count):
@@ -209,12 +211,11 @@ def main():
     global log,redis_client
     log,settings=init()
     redis_client=Redis(host=settings["redis_host"],port=settings["redis_port"])
-    for sample_name in os.listdir(path_sample_parent):
-        if sample_name=="gs_spring_boot":
-            log.info("Start to process sample {}".format(sample_name))
-            path_sample = os.path.join(path_sample_parent, sample_name)
-            test_initless(path_sample)
-            test_normal(path_sample)
+    for code_dir in os.listdir(settings["code_dir"]):
+        log.info("Start to process {}".format(code_dir))
+        path_code_dir= os.path.join(settings["code_dir"], code_dir)
+        test_initless(path_code_dir)
+        test_normal(path_code_dir)
 
 if __name__=="__main__":
     main()
