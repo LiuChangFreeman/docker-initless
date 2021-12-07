@@ -48,8 +48,17 @@ python checkpoint_manager.py
 //Run tests with the CRIU checkpoints comparing with normal docker-run cases
 python run_tests.py
 
+//Start sample services with CRIU checkpoint
+systemctl start docker-initless
+
+//Now you can visit the sample services on port 8001 and 8002
+time curl http://0.0.0.0:8002
+time curl http://0.0.0.0:8001?key=888888
+
+//Look up status of docker-initless
+systemctl status docker-initless
 ```
-## Samples
+## Examples
 Use `docker-initless -t` or `python run_tests.py` to make tests with the CRIU checkpoints.   
 Use `docker-initless -clean` or `sh clean.sh` to make a totally clean-up when you get errors.  
 ```bash
@@ -67,55 +76,15 @@ Use `docker-initless -clean` or `sh clean.sh` to make a totally clean-up when yo
 2021/12/07 05:20:17 [gs_spring_boot-17589] Start to remove
 2021/12/07 05:20:17 [gs_spring_boot-17589] Remove finished
 ```
-
-```bash
-[root@iZuf66kclfla82jiha2r23Z home]# python run_tests.py 
-12/07/21 05:22:10 [gs_spring_boot] Start to test initless boot
-12/07/21 05:22:10 --------Epoch 1--------
-12/07/21 05:22:10 [gs_spring_boot] Prepare checkpoint imgs using overlay-fs
-12/07/21 05:22:10 [gs_spring_boot] Create container
-12/07/21 05:22:10 [gs_spring_boot] Start lazy-pages server
-12/07/21 05:22:10 [gs_spring_boot] Set watchdog port
-12/07/21 05:22:10 [gs_spring_boot] Pre-start container
-12/07/21 05:22:10 [gs_spring_boot] Will start the container after 3s
-12/07/21 05:22:13 [gs_spring_boot] Try to start container
-12/07/21 05:22:13 [gs_spring_boot] Container started
-12/07/21 05:22:13 [gs_spring_boot] Docker start time: 0.072777s
-12/07/21 05:22:13 [gs_spring_boot] Health check want: "Greetings from Spring Boot!"
-12/07/21 05:22:13 [gs_spring_boot] Got: "Greetings from Spring Boot!", assert success
-12/07/21 05:22:13 [gs_spring_boot] Request totally cost: 0.370128s
-12/07/21 05:22:13 [gs_spring_boot] Test finished
-12/07/21 05:22:13 --------Epoch end--------
-12/07/21 05:22:13 [gs_spring_boot] Start to test normal boot
-12/07/21 05:22:13 --------Epoch 1--------
-12/07/21 05:22:13 [gs_spring_boot] Run container
-12/07/21 05:22:16 [gs_spring_boot] Health check want: "Greetings from Spring Boot!"
-12/07/21 05:22:16 [gs_spring_boot] Got: "Greetings from Spring Boot!", assert success
-12/07/21 05:22:16 [gs_spring_boot] Total cost: 2.571254s
-12/07/21 05:22:16 [gs_spring_boot] Test finished
-12/07/21 05:22:16 --------Epoch end--------
-12/07/21 05:22:16 [flask] Start to test initless boot
-12/07/21 05:22:16 --------Epoch 1--------
-12/07/21 05:22:16 [flask] Prepare checkpoint imgs using overlay-fs
-12/07/21 05:22:16 [flask] Create container
-12/07/21 05:22:16 [flask] Start lazy-pages server
-12/07/21 05:22:16 [flask] Set watchdog port
-12/07/21 05:22:16 [flask] Pre-start container
-12/07/21 05:22:16 [flask] Will start the container after 3s
-12/07/21 05:22:19 [flask] Try to start container
-12/07/21 05:22:19 [flask] Container started
-12/07/21 05:22:19 [flask] Docker start time: 0.131514s
-12/07/21 05:22:19 [flask] Health check want: "9999"
-12/07/21 05:22:19 [flask] Got: "{"value": 9999}", assert success
-12/07/21 05:22:19 [flask] Request totally cost: 0.137314s
-12/07/21 05:22:20 [flask] Test finished
-12/07/21 05:22:20 --------Epoch end--------
-12/07/21 05:22:20 [flask] Start to test normal boot
-12/07/21 05:22:20 --------Epoch 1--------
-12/07/21 05:22:20 [flask] Run container
-12/07/21 05:22:24 [flask] Health check want: "9999"
-12/07/21 05:22:24 [flask] Got: "{"value": 9999}", assert success
-12/07/21 05:22:24 [flask] Total cost: 3.922676s
-12/07/21 05:22:24 [flask] Test finished
-12/07/21 05:22:24 --------Epoch end--------
+```
+[root@iZuf66kclfla82jiha2r23Z home]# time curl http://0.0.0.0:8002
+Greetings from Spring Boot!
+real    0m0.399s
+user    0m0.001s
+sys     0m0.003s
+[root@iZuf66kclfla82jiha2r23Z home]# time curl http://0.0.0.0:8001?key=888888
+{"value": 888888}
+real    0m0.085s
+user    0m0.001s
+sys     0m0.003s
 ```
