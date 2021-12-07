@@ -107,8 +107,8 @@ def run_container_initless(container_id, config):
                 url="http://0.0.0.0:{}{}".format(container_port, health_check["path"])
                 response=requests.get(url,timeout=0.1)
                 assert health_check["wanted"] in response.text
-                log.info("[{}] Health check want: {}".format(service_name,health_check["wanted"]))
-                log.info("[{}] Got: {}, assert success".format(service_name,response.text))
+                log.info("[{}] Health check want: \"{}\"".format(service_name,health_check["wanted"]))
+                log.info("[{}] Got: \"{}\", assert success".format(service_name,response.text))
                 break
             except:
                 pass
@@ -175,8 +175,8 @@ def run_container_normal(container_id, config):
                 url="http://0.0.0.0:{}{}".format(container_port, health_check["path"])
                 response=requests.get(url,timeout=0.1)
                 assert health_check["wanted"] in response.text
-                log.info("[{}] Health check want: {}".format(service_name,health_check["wanted"]))
-                log.info("[{}] Got: {}, assert success".format(service_name,response.text))
+                log.info("[{}] Health check want: \"{}\"".format(service_name,health_check["wanted"]))
+                log.info("[{}] Got: \"{}\", assert success".format(service_name,response.text))
                 break
             except:
                 pass
