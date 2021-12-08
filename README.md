@@ -1,6 +1,6 @@
 # Docker-initless
 Boot containers using `checkpoint && restore`    
-Eliminate [gs-spring-boot](https://github.com/LiuChangFreeman/gs-spring-boot) docker container's cold start time from **2500+ ms** to **400- ms**   
+Eliminate [gs-spring-boot](https://github.com/LiuChangFreeman/gs-spring-boot) docker container's cold start time from **2500+ms** to **400-ms**   
 Cost saving along with better performance as on-remand Docker service.  
 ## Dependencies  
 
@@ -14,10 +14,47 @@ Cost saving along with better performance as on-remand Docker service.
 Currently `docker-initless` is developed on a normal server with regular hardware _(2 vCore-4 GB, Centos 7 , without fast SSD)_ . All you need is to build the docker-in-docker image and give the **--privileged** flag to your `docker-initless` container instance. 
 
 ## How does it work?
+The simplest `hello-world` container will still costs about 700ms to boot(Many people hate cold start of FaaS, which comes from this):
+```c++
+root@VM-4-7-ubuntu:~# time docker run --rm hello-world
 
-`docker-initless` works with the **criu** project, which is known as a tool which can recover a group of froozen processes on another machine.   
+Hello from Docker!
+This message shows that your installation appears to be working correctly.
+
+To generate this message, Docker took the following steps:
+ 1. The Docker client contacted the Docker daemon.
+ 2. The Docker daemon pulled the "hello-world" image from the Docker Hub.
+    (amd64)
+ 3. The Docker daemon created a new container from that image which runs the
+    executable that produces the output you are currently reading.
+ 4. The Docker daemon streamed that output to the Docker client, which sent it
+    to your terminal.
+
+To try something more ambitious, you can run an Ubuntu container with:
+ $ docker run -it ubuntu bash
+
+Share images, automate workflows, and more with a free Docker ID:
+ https://hub.docker.com/
+
+For more examples and ideas, visit:
+ https://docs.docker.com/get-started/
+
+
+real    0m0.682s
+user    0m0.019s
+sys     0m0.012s
+```  
+`docker-initless` works with the **criu** project, which is known as a tool which can recover a group of froozen processes on another machine. This tool can be used to perform `AOT` optimization of Docker containers cold start.   
 `docker-initless` uses the `post-copy restore` to make a container runable before the pages are filled into memory which is a background task. Time spent on restoring memory pages at *GB* level will be reduced significantly.     
-The other `pre-start mechanism` can also reduce several hundreds of millis during the total container boot precedure.  
+The other `pre-start` mechanism can also save about 300+ms(Most of it comes from creating `network namespace`). `docker-initless` creates and starts a container but doesn't allow CRIU to restore memory pages until it connects the port that runc watches. This means that `network namespace` can be ready ahead of time before CPU and memory are allocated when there are requests to handle. So the cost of `pre-start` container pool is very low.
+
+## Which kind of service can be optimized with docker-initless?
+Current limitation:  
+1. Can only be HTTP service
+2. Must be state-less. Instances can be removed immediately after requests are handled so don't use background tasks. 
+3. Must handle errors when connections are broken. This means that if your service uses redis/mysql/mongodb, you should check whether the connections were dead and do reconnect.
+4. Must print a message to stdout when the service is ready for connections(See `msg_checkpoint` defined in `config.yaml`). `docker-initless` will try to get logs of the container once every 3s and check whether the message were printed. If so, it will let CRIU to checkpont the container.
+5. No support for mount volumes(TODO).
 
 ## Let's setup  
 ### 1. Build the docker-in-docker image
@@ -41,7 +78,7 @@ docker exec -it  docker-initless /bin/bash
 ### 2. Generate asserts of the service
 Note: **all these operations should be done INSIDE the container created above** 
 ```bash
-//Setup a redis server using the inside Docker(If you do it outside there may be some bugs)
+//Setup a redis server using the inside Docker(redis_host is set to 0.0.0.0 by default so we need to run it inside)
 docker run -p 0.0.0.0:6380:6379 --name redis --restart=always -d redis redis-server
 
 //Create sample hello-world service images and CRIU checkpoints using the python script
