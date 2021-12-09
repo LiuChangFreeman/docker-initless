@@ -115,8 +115,6 @@ code_dir: #The code folder of mutiple Docker services. Each should contain a doc
     "/home/sample"
 checkpoint_dir: #The folder used to store CRIU checkpoints. `temp` will be created automaticlly and used for creating temp containers.
     "/home/checkpoint"
-recycle_workers: #Jobs to remove `dead` containers. 
-    4
 pre_start_pool_size: #Number of the containers which are pre-started and can be booted at once.
     2
 max_pool_size: #Max size of containers which are running and can handle requests.

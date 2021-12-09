@@ -37,7 +37,7 @@ type ContainerInstance struct {
 	BootTime      time.Time
 }
 
-func setCheckpointImages(instance *ContainerInstance) {
+func prepareCheckpointImages(instance *ContainerInstance) {
 	config := instance.Config
 	containerId := instance.Port
 	pathCheckpoint := settings.CheckpointDir
@@ -90,15 +90,17 @@ func startLazyPageServer(instance *ContainerInstance) {
 	pathCheckpointTemp := path.Join(pathCheckpoint, "temp")
 	pathCheckpointMerge := path.Join(pathCheckpointTemp, fmt.Sprintf("v%v-merge", containerId))
 
-	_, err := exec.Command("/usr/local/bin/criu", "lazy-pages", "--images-dir", pathCheckpointMerge).Output()
+	res, err := exec.Command("/usr/local/bin/criu", "lazy-pages", "--images-dir", pathCheckpointMerge).Output()
 	if err != nil {
 		if instance.Status != Stopped {
-			log.Printf("[%v] Start lazy-pages error: %v", instance.Name, err)
+			log.Printf("[%v] Start lazy-pages error: %v, msg: %v", instance.Name, err, string(res))
 		}
 	}
 }
 
 func preStartContainer(instance *ContainerInstance) {
+	go startLazyPageServer(instance)
+
 	containerId := instance.Port
 	pathCheckpoint := settings.CheckpointDir
 	pathCheckpointTemp := path.Join(pathCheckpoint, "temp")
@@ -106,27 +108,27 @@ func preStartContainer(instance *ContainerInstance) {
 	if err != nil {
 		if instance.Status != Stopped {
 			log.Printf("[%v] Pre-start container error: %v\n", instance.Name, err)
+			instance.Status = Stopped
 		}
 	}
 }
 
 func removeContainer(instance *ContainerInstance) {
-	containerId := instance.Port
-	_, _ = net.Dial("tcp", fmt.Sprintf("%v:%v", settings.RuncWatchdogHost, instance.Port+settings.RuncWatchdogPortBase))
 	log.Printf("[%v] Start to remove\n", instance.Name)
 
-	cmdKillPageServer := fmt.Sprintf("ps -ef| grep 'v%v-merge'  | awk '{print $2}' |xargs kill -9", containerId)
-	_, _ = exec.Command("bash", "-c", cmdKillPageServer).Output()
+	killPageServer(instance)
 
-	cmdKillDockerRunc := fmt.Sprintf("ps -ef| grep '%v'  | awk '{print $2}' |xargs kill -9", instance.Id)
-	_, _ = exec.Command("bash", "-c", cmdKillDockerRunc).Output()
+	killDockerRunc(instance)
 
 	_ = dockerClient.ContainerRemove(ctx, instance.Id, types.ContainerRemoveOptions{Force: true})
+
 	redisClient.Del(ctx, instance.Id)
+
 	allocatedPorts.Lock()
 	delete(allocatedPorts.data, instance.Port)
 	allocatedPorts.Unlock()
-	log.Printf("[%v] Remove finished\n", instance.Name)
+
+	log.Printf("[%v] Remove finished,ID: %v\n", instance.Name, instance.Id[:12])
 }
 
 func startContainer(instance *ContainerInstance) {
@@ -210,7 +212,7 @@ func newContainerInstance(config ServiceConfig) *ContainerInstance {
 			}},
 		},
 	}
-	setCheckpointImages(instance)
+	prepareCheckpointImages(instance)
 
 	log.Printf("[%v] Create container %v\n", config.ServiceName, containerName)
 	containerCurrent, err := dockerClient.ContainerCreate(ctx, dockerConfig, hostConfig, nil, nil, containerName)
@@ -219,8 +221,6 @@ func newContainerInstance(config ServiceConfig) *ContainerInstance {
 		return nil
 	}
 	instance.Id = containerCurrent.ID
-
-	go startLazyPageServer(instance)
 
 	portWatchdog := settings.RuncWatchdogPortBase + portChosen
 	redisClient.Set(ctx, instance.Id, portWatchdog, 0)
@@ -245,6 +245,10 @@ func cleanUpStoppedContainerInstances() {
 	for {
 		select {
 		case instance := <-stopedInstances:
+			if len(boottingContainer) > 1 {
+				time.Sleep(time.Second * 5)
+				stopedInstances <- instance
+			}
 			done := make(chan void, 1)
 			go func() {
 				removeCheckpointImages(instance)
@@ -254,9 +258,17 @@ func cleanUpStoppedContainerInstances() {
 
 			select {
 			case <-done:
+				go func() {
+					killDockerRunc(instance)
+				}()
 				break
-			case <-time.After(time.Second * 30):
-				log.Printf("[Warning] Remove container time out\n")
+			case <-time.After(time.Second * 5):
+				log.Printf("[error] Remove container %v time out,ID: %v\n", instance.Name, instance.Id[:12])
+				go func() {
+					killDockerRunc(instance)
+					time.Sleep(time.Second * 5)
+					stopedInstances <- instance
+				}()
 				break
 			}
 		}

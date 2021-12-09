@@ -28,7 +28,6 @@ type Settings struct {
 	PreStartTimeout      int    `yaml:"pre_start_timeout"`
 	IdleTimeout          int    `yaml:"idle_timeout"`
 	HealthCheckTimeout   int    `yaml:"health_check_timeout"`
-	RecycleWorkers       int    `yaml:"recycle_workers"`
 	PreStartPoolSize     int    `yaml:"pre_start_pool_size"`
 	MaxPoolSize          int    `yaml:"max_pool_size"`
 	MaxConcurrency       int    `yaml:"max_concurrency"`
@@ -71,7 +70,7 @@ func Exists(path string) bool {
 }
 
 func getVersion() {
-	version := "0.1.1"
+	version := "0.1.2"
 	fmt.Printf("Docker-initless version %v\n", version)
 }
 
@@ -189,6 +188,16 @@ func getUsedPorts() map[int]void {
 	}
 
 	return set
+}
+
+func killDockerRunc(instance *ContainerInstance) {
+	cmdKillDockerRunc := fmt.Sprintf("ps -ef| grep '%v'  | awk '{print $2}' |xargs kill -9", instance.Id)
+	_, _ = exec.Command("bash", "-c", cmdKillDockerRunc).Output()
+}
+
+func killPageServer(instance *ContainerInstance) {
+	cmdKillPageServer := fmt.Sprintf("ps -ef| grep 'v%v-merge'  | awk '{print $2}' |xargs kill -9", instance.Port)
+	_, _ = exec.Command("bash", "-c", cmdKillPageServer).Output()
 }
 
 func healthCheck(instance *ContainerInstance) bool {

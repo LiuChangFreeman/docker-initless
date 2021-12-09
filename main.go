@@ -22,12 +22,13 @@ var (
 	cleanUp     bool
 	showVersion bool
 
-	stopedInstances   = make(chan *ContainerInstance)
+	stopedInstances   chan *ContainerInstance
 	boottingContainer = make(chan void, 1)
-	ctx               = context.Background()
-	settings          = getSettings()
-	redisClient       *redis.Client
-	dockerClient      *client.Client
+
+	ctx          = context.Background()
+	settings     = getSettings()
+	redisClient  *redis.Client
+	dockerClient *client.Client
 
 	allocatedPorts = struct {
 		sync.RWMutex
@@ -108,9 +109,8 @@ func main() {
 
 	if doServe {
 
-		for i := 0; i < settings.RecycleWorkers; i++ {
-			go cleanUpStoppedContainerInstances()
-		}
+		go cleanUpStoppedContainerInstances()
+		stopedInstances = make(chan *ContainerInstance, (settings.MaxPoolSize+settings.PreStartPoolSize)*4)
 
 		for _, pathCodeDir := range pathCodeDirs {
 			pathCurrent := path.Join(codeDir, pathCodeDir.Name())

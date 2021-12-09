@@ -7,7 +7,6 @@ reserved_ports:
   [10000,20000]
 code_dir: "/home/sample"
 checkpoint_dir: "/home/checkpoint"
-recycle_workers: 4
 pre_start_pool_size: 2
 max_pool_size: 4
 pre_start_timeout: 15
