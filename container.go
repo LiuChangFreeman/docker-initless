@@ -37,7 +37,7 @@ type ContainerInstance struct {
 	BootTime      time.Time
 }
 
-func setCheckpointImages(instance *ContainerInstance) string {
+func setCheckpointImages(instance *ContainerInstance) {
 	config := instance.Config
 	containerId := instance.Port
 	pathCheckpoint := settings.CheckpointDir
@@ -67,8 +67,6 @@ func setCheckpointImages(instance *ContainerInstance) string {
 	if err != nil {
 		log.Printf("[%v] Mount overlay-fs error: %v", instance.Name, err)
 	}
-
-	return pathCheckpointMerge
 }
 
 func removeCheckpointImages(instance *ContainerInstance) {
@@ -86,10 +84,17 @@ func removeCheckpointImages(instance *ContainerInstance) {
 	_ = os.RemoveAll(pathCheckpointUpper)
 }
 
-func startLazyPageServer(pathCheckpoint string) {
-	_, err := exec.Command("/usr/local/bin/criu", "lazy-pages", "--images-dir", pathCheckpoint).Output()
+func startLazyPageServer(instance *ContainerInstance) {
+	containerId := instance.Port
+	pathCheckpoint := settings.CheckpointDir
+	pathCheckpointTemp := path.Join(pathCheckpoint, "temp")
+	pathCheckpointMerge := path.Join(pathCheckpointTemp, fmt.Sprintf("v%v-merge", containerId))
+
+	_, err := exec.Command("/usr/local/bin/criu", "lazy-pages", "--images-dir", pathCheckpointMerge).Output()
 	if err != nil {
-		log.Printf("[%v] Start lazy page server error: %v\n", pathCheckpoint, err)
+		if instance.Status != Stopped {
+			log.Printf("[%v] Start lazy-pages error: %v", instance.Name, err)
+		}
 	}
 }
 
@@ -99,7 +104,9 @@ func preStartContainer(instance *ContainerInstance) {
 	pathCheckpointTemp := path.Join(pathCheckpoint, "temp")
 	err := dockerClient.ContainerStart(ctx, instance.Id, types.ContainerStartOptions{CheckpointDir: pathCheckpointTemp, CheckpointID: fmt.Sprintf("v%v-merge", containerId)})
 	if err != nil {
-		log.Printf("[%v] Pre-start container error: %v\n", instance.Name, err)
+		if instance.Status != Stopped {
+			log.Printf("[%v] Pre-start container error: %v\n", instance.Name, err)
+		}
 	}
 }
 
@@ -203,7 +210,7 @@ func newContainerInstance(config ServiceConfig) *ContainerInstance {
 			}},
 		},
 	}
-	pathCheckpoint := setCheckpointImages(instance)
+	setCheckpointImages(instance)
 
 	log.Printf("[%v] Create container %v\n", config.ServiceName, containerName)
 	containerCurrent, err := dockerClient.ContainerCreate(ctx, dockerConfig, hostConfig, nil, nil, containerName)
@@ -213,7 +220,7 @@ func newContainerInstance(config ServiceConfig) *ContainerInstance {
 	}
 	instance.Id = containerCurrent.ID
 
-	go startLazyPageServer(pathCheckpoint)
+	go startLazyPageServer(instance)
 
 	portWatchdog := settings.RuncWatchdogPortBase + portChosen
 	redisClient.Set(ctx, instance.Id, portWatchdog, 0)
