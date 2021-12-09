@@ -17,6 +17,7 @@ import (
 )
 
 type Settings struct {
+	RedisName            string `yaml:"redis_name"`
 	RedisHost            string `yaml:"redis_host"`
 	RedisPort            int    `yaml:"redis_port"`
 	RuncWatchdogHost     string `yaml:"runc_watchdog_host"`
@@ -67,6 +68,11 @@ func Exists(path string) bool {
 		return false
 	}
 	return true
+}
+
+func getVersion() {
+	version := "0.1.1"
+	fmt.Printf("Docker-initless version %v\n", version)
 }
 
 func handleConn(conn *net.TCPConn, instance *ContainerInstance) {

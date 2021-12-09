@@ -104,8 +104,16 @@ func preStartContainer(instance *ContainerInstance) {
 }
 
 func removeContainer(instance *ContainerInstance) {
+	containerId := instance.Port
 	_, _ = net.Dial("tcp", fmt.Sprintf("%v:%v", settings.RuncWatchdogHost, instance.Port+settings.RuncWatchdogPortBase))
 	log.Printf("[%v] Start to remove\n", instance.Name)
+
+	cmdKillPageServer := fmt.Sprintf("ps -ef| grep 'v%v-merge'  | awk '{print $2}' |xargs kill -9", containerId)
+	_, _ = exec.Command("bash", "-c", cmdKillPageServer).Output()
+
+	cmdKillDockerRunc := fmt.Sprintf("ps -ef| grep '%v'  | awk '{print $2}' |xargs kill -9", instance.Id)
+	_, _ = exec.Command("bash", "-c", cmdKillDockerRunc).Output()
+
 	_ = dockerClient.ContainerRemove(ctx, instance.Id, types.ContainerRemoveOptions{Force: true})
 	redisClient.Del(ctx, instance.Id)
 	allocatedPorts.Lock()
@@ -419,17 +427,17 @@ func cleanUpContainers() {
 	_ = os.RemoveAll(pathCheckpointTemp)
 	_ = os.Mkdir(pathCheckpointTemp, 0777)
 
-	cmdRestartDockerDaemon := "systemctl restart docker"
-	_, _ = exec.Command("bash", "-c", cmdRestartDockerDaemon).Output()
+	cmdKillPageServers := "ps -ef| grep 'criu'  | awk '{print $2}' |xargs kill -9"
+	_, _ = exec.Command("bash", "-c", cmdKillPageServers).Output()
+
+	cmdKillDockerRunc := "ps -ef| grep 'docker-runc'  | awk '{print $2}' |xargs kill -9"
+	_, _ = exec.Command("bash", "-c", cmdKillDockerRunc).Output()
 
 	containers, _ := dockerClient.ContainerList(ctx, types.ContainerListOptions{All: true})
 	for _, instance := range containers {
-		if instance.Names[0][1:] == "redis" {
+		if instance.Names[0][1:] == settings.RedisName {
 			continue
 		}
 		_ = dockerClient.ContainerRemove(ctx, instance.ID, types.ContainerRemoveOptions{Force: true})
 	}
-
-	cmdKillPageServers := "ps -ef| grep 'criu'  | awk '{print $2}' |xargs kill -9"
-	_, _ = exec.Command("bash", "-c", cmdKillPageServers).Output()
 }

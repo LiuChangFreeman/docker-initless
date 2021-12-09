@@ -16,14 +16,18 @@ import (
 )
 
 var (
-	showHelp     bool
-	runTests     bool
-	doServe      bool
-	cleanUp      bool
-	ctx          = context.Background()
-	settings     = getSettings()
-	redisClient  *redis.Client
-	dockerClient *client.Client
+	showHelp    bool
+	runTests    bool
+	doServe     bool
+	cleanUp     bool
+	showVersion bool
+
+	stopedInstances   = make(chan *ContainerInstance)
+	boottingContainer = make(chan void, 1)
+	ctx               = context.Background()
+	settings          = getSettings()
+	redisClient       *redis.Client
+	dockerClient      *client.Client
 
 	allocatedPorts = struct {
 		sync.RWMutex
@@ -44,19 +48,23 @@ var (
 		sync.RWMutex
 		data map[int]chan *ContainerInstance
 	}{data: make(map[int]chan *ContainerInstance)}
-
-	stopedInstances   = make(chan *ContainerInstance)
-	boottingContainer = make(chan void, 1)
 )
 
 func init() {
+
 	flag.BoolVar(&showHelp, "h", false, "show help")
 	flag.BoolVar(&runTests, "t", false, "run tests using initless mode")
 	flag.BoolVar(&doServe, "d", false, "start daemon service")
 	flag.BoolVar(&cleanUp, "clean", false, "clean up all containers, except for redis")
+	flag.BoolVar(&showVersion, "v", false, "get version")
 	flag.Parse()
-	if showHelp || (!runTests && !doServe && !cleanUp) {
-		flag.Usage()
+
+	if !runTests && !doServe && !cleanUp {
+		if showVersion {
+			getVersion()
+		} else {
+			flag.Usage()
+		}
 		os.Exit(0)
 	}
 
